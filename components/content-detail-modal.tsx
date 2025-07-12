@@ -1,59 +1,162 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { X, Play, Download, Heart, Share2, Star, Clock, Users } from "lucide-react"
+import { X, Play, Plus, Info, Star, Clock, Calendar, Users } from "lucide-react"
 import Image from "next/image"
-import VideoPlayer from "./video-player"
-
-interface ContentItem {
-  id: number
-  title: string
-  image: string
-  genre: string
-  year?: number
-  rating?: string
-  duration?: string
-  description?: string
-  cast?: string[]
-  director?: string
-  imdbRating?: number
-  quality?: string[]
-  languages?: string[]
-  match?: number
-}
+import { getContent, recordContentView, getStreamUrl, getStreamUrlAlternative } from "@/lib/api"
+import type { Content } from "@/lib/types"
+import { useAuth } from "@/lib/auth-context"
+import VideoPlayer from "@/components/video-player"
 
 interface ContentDetailModalProps {
-  content: ContentItem | null
+  contentId: string | null
   onClose: () => void
 }
 
-export default function ContentDetailModal({ content, onClose }: ContentDetailModalProps) {
-  const [showPlayer, setShowPlayer] = useState(false)
-  const [isInWatchlist, setIsInWatchlist] = useState(false)
+export default function ContentDetailModal({ contentId, onClose }: ContentDetailModalProps) {
+  const { user, selectedProfile } = useAuth()
+  const [content, setContent] = useState<Content | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [showVideoPlayer, setShowVideoPlayer] = useState(false)
+  const [videoUrl, setVideoUrl] = useState<string | null>(null)
 
-  if (!content) return null
+  useEffect(() => {
+    if (contentId) {
+      loadContent()
+    }
+  }, [contentId])
 
-  // Mock detailed data based on content
-  const detailedContent = {
-    ...content,
-    year: content.year || 2023,
-    rating: content.rating || "TV-MA",
-    duration: content.duration || "45min",
-    description:
-      content.description ||
-      `${content.title} é uma série dramática que explora temas profundos através de personagens complexos e narrativas envolventes. Uma produção original Aurora+ que redefine o entretenimento premium.`,
-    cast: content.cast || ["Alexander Dreymon", "Emily Cox", "David Dawson", "Ian Hart"],
-    director: content.director || "Peter Kosminsky",
-    imdbRating: content.imdbRating || 8.5,
-    quality: content.quality || ["4K", "HDR", "Dolby Vision", "Dolby Atmos"],
-    languages: content.languages || ["Português", "English", "Español"],
-    match: content.match || Math.floor(Math.random() * 20) + 80,
+  const loadContent = async () => {
+    if (!contentId) return
+
+    setLoading(true)
+    setError(null)
+
+    try {
+      const response = await getContent(contentId)
+      setContent(response.data)
+    } catch (err: any) {
+      setError(err.message || 'Erro ao carregar conteúdo')
+    } finally {
+      setLoading(false)
+    }
   }
 
-  if (showPlayer) {
-    return <VideoPlayer onClose={() => setShowPlayer(false)} title={content.title} />
+  const handlePlay = async () => {
+    if (!content || !user || !selectedProfile) {
+      alert('Usuário não autenticado. Faça login novamente.')
+      return
+    }
+
+    // Ir direto para o player com loading
+    setShowVideoPlayer(true)
+    setVideoUrl('') // URL vazia para mostrar loading
+
+    try {
+      console.log('Iniciando reprodução para:', content.nome)
+      console.log('Usuário:', user.id)
+      console.log('Perfil:', selectedProfile.id)
+
+      let streamResponse
+      
+      try {
+        // Tentar registrar visualização primeiro
+        await recordContentView(content.id, {
+          user_id: user.id,
+          profile_id: selectedProfile.id,
+          view_duration: 0,
+          view_percentage: 0
+        })
+        console.log('Visualização registrada com sucesso')
+      } catch (err: any) {
+        // Se der erro 400 (visualização já registrada), continuar mesmo assim
+        if (err.status === 400 && err.message.includes('já registrada')) {
+          console.log('Visualização já registrada, continuando...')
+        } else {
+          // Se for outro erro, mostrar e parar
+          console.error('Erro ao registrar visualização:', err)
+          // Não mostrar alert, apenas log do erro
+        }
+      }
+
+      // Obter URL do stream (independente se a visualização foi registrada ou não)
+      console.log('Obtendo URL do stream...')
+      
+      try {
+        streamResponse = await getStreamUrl(content.id)
+        console.log('Resposta do stream:', streamResponse)
+      } catch (error) {
+        console.log('Erro na função principal, tentando alternativa...')
+        try {
+          streamResponse = await getStreamUrlAlternative(content.id)
+          console.log('Resposta do stream (alternativa):', streamResponse)
+        } catch (altError) {
+          console.error('Erro na função alternativa:', altError)
+          throw error // Re-throw o erro original
+        }
+      }
+      
+      if (streamResponse.success && streamResponse.data.streamUrl) {
+        console.log('URL do stream obtida:', streamResponse.data.streamUrl)
+        
+        // Verificar se a URL é válida
+        if (!streamResponse.data.streamUrl.startsWith('http')) {
+          console.error('URL do stream inválida:', streamResponse.data.streamUrl)
+          alert('Erro: URL do stream inválida. Tente novamente.')
+          setShowVideoPlayer(false)
+          return
+        }
+        
+        // Configurar URL do vídeo (o player fará auto-play)
+        setVideoUrl(streamResponse.data.streamUrl)
+      } else {
+        console.error('Erro ao obter URL do stream:', streamResponse.message)
+        alert('Erro ao iniciar reprodução. Tente novamente.')
+        setShowVideoPlayer(false)
+      }
+    } catch (err: any) {
+      console.error('Erro ao reproduzir conteúdo:', err)
+      alert('Erro ao reproduzir conteúdo. Tente novamente.')
+      setShowVideoPlayer(false)
+    }
+  }
+
+  const handleCloseVideoPlayer = () => {
+    setShowVideoPlayer(false)
+    setVideoUrl(null)
+  }
+
+  const formatDuration = (minutes: number) => {
+    const hours = Math.floor(minutes / 60)
+    const mins = minutes % 60
+    return hours > 0 ? `${hours}h ${mins}min` : `${mins}min`
+  }
+
+  const formatNumber = (num: number) => {
+    if (num >= 1000000) {
+      return `${(num / 1000000).toFixed(1)}M`
+    }
+    if (num >= 1000) {
+      return `${(num / 1000).toFixed(1)}K`
+    }
+    return num.toString()
+  }
+
+  if (!contentId) return null
+
+  // Se o video player estiver ativo, mostrar apenas ele
+  if (showVideoPlayer) {
+    return (
+      <div className="fixed inset-0 z-50 animate-fade-in">
+        <VideoPlayer
+          onClose={handleCloseVideoPlayer}
+          title={content?.nome || 'Reproduzindo...'}
+          videoUrl={videoUrl || undefined}
+        />
+      </div>
+    )
   }
 
   return (
@@ -62,182 +165,166 @@ export default function ContentDetailModal({ content, onClose }: ContentDetailMo
       <div className="absolute inset-0 bg-black/90 backdrop-blur-xl" onClick={onClose} />
 
       {/* Modal */}
-      <div className="relative w-full max-w-4xl max-h-[90vh] overflow-y-auto animate-scale-in">
-        <div className="bg-gray-900/95 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl">
+      <div className="relative w-full max-w-6xl max-h-[90vh] overflow-y-auto animate-scale-in">
+        <div className="bg-[#18181b]/95 backdrop-blur-2xl border border-white/10 rounded-3xl shadow-2xl">
           {/* Close Button */}
           <button
             onClick={onClose}
-            className="absolute top-6 right-6 z-10 text-gray-400 hover:text-white transition-colors p-2 bg-black/50 rounded-full backdrop-blur-sm"
+            className="absolute top-6 right-6 text-gray-400 hover:text-white transition-colors p-1 z-10"
+            aria-label="Fechar"
           >
-            <X className="w-5 h-5" />
+            <X className="w-6 h-6" />
           </button>
 
-          {/* Hero Section */}
-          <div className="relative h-80 rounded-t-3xl overflow-hidden">
-            <Image src={content.image || "/placeholder.svg"} alt={content.title} fill className="object-cover" />
-            <div className="absolute inset-0 bg-gradient-to-t from-gray-900 via-gray-900/50 to-transparent" />
-
-            {/* Content Info Overlay */}
-            <div className="absolute bottom-6 left-6 right-6">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <h1 className="text-4xl font-bold text-white mb-2">{content.title}</h1>
-                  <div className="flex items-center space-x-4 mb-4">
-                    <Badge className="bg-blue-600 text-white px-3 py-1">{detailedContent.match}% Match</Badge>
-                    <span className="text-green-400 font-semibold">{detailedContent.year}</span>
-                    <span className="border border-gray-500 px-2 py-1 text-sm text-white">
-                      {detailedContent.rating}
-                    </span>
-                    <span className="flex items-center text-white">
-                      <Clock className="w-4 h-4 mr-1" />
-                      {detailedContent.duration}
-                    </span>
-                    <span className="flex items-center text-yellow-500">
-                      <Star className="w-4 h-4 mr-1" />
-                      {detailedContent.imdbRating}
-                    </span>
-                  </div>
-                  <Badge variant="outline" className="border-white/30 text-white">
-                    {content.genre}
-                  </Badge>
-                </div>
-              </div>
+          {loading && (
+            <div className="flex items-center justify-center p-20">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
             </div>
-          </div>
+          )}
 
-          {/* Content Body */}
-          <div className="p-8">
-            {/* Action Buttons */}
-            <div className="flex flex-wrap gap-4 mb-8">
-              <Button
-                onClick={() => setShowPlayer(true)}
-                className="bg-white text-black hover:bg-gray-200 px-8 py-3 text-lg font-semibold rounded-xl transition-all duration-300 hover:scale-105"
-              >
-                <Play className="w-5 h-5 mr-2" />
-                Assistir
-              </Button>
-              <Button
-                variant="outline"
-                className="border-white/30 text-white hover:bg-white/10 px-6 py-3 rounded-xl backdrop-blur-sm bg-transparent"
-              >
-                <Download className="w-5 h-5 mr-2" />
-                Download
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => setIsInWatchlist(!isInWatchlist)}
-                className={`border-white/30 text-white hover:bg-white/10 px-6 py-3 rounded-xl backdrop-blur-sm ${
-                  isInWatchlist ? "bg-red-600/20 border-red-600" : "bg-transparent"
-                }`}
-              >
-                <Heart className={`w-5 h-5 mr-2 ${isInWatchlist ? "fill-current text-red-500" : ""}`} />
-                {isInWatchlist ? "Na Lista" : "Minha Lista"}
-              </Button>
-              <Button
-                variant="outline"
-                className="border-white/30 text-white hover:bg-white/10 p-3 rounded-xl backdrop-blur-sm bg-transparent"
-              >
-                <Share2 className="w-5 h-5" />
-              </Button>
+          {error && (
+            <div className="p-8 text-center">
+              <p className="text-red-400">{error}</p>
+              <Button onClick={onClose} className="mt-4">Fechar</Button>
             </div>
+          )}
 
-            {/* Quality Badges */}
-            <div className="flex flex-wrap gap-2 mb-6">
-              {detailedContent.quality.map((quality) => (
-                <Badge key={quality} className="bg-blue-600/20 text-blue-400 border border-blue-600/30">
-                  {quality}
-                </Badge>
-              ))}
-            </div>
-
-            {/* Description */}
-            <div className="mb-8">
-              <h3 className="text-xl font-semibold text-white mb-3">Sinopse</h3>
-              <p className="text-gray-300 leading-relaxed text-lg">{detailedContent.description}</p>
-            </div>
-
-            {/* Details Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-              <div>
-                <h3 className="text-lg font-semibold text-white mb-4">Elenco Principal</h3>
-                <div className="space-y-2">
-                  {detailedContent.cast.map((actor, index) => (
-                    <div key={index} className="flex items-center space-x-3">
-                      <div className="w-8 h-8 bg-gray-700 rounded-full flex items-center justify-center">
-                        <Users className="w-4 h-4 text-gray-400" />
-                      </div>
-                      <span className="text-gray-300">{actor}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-6">
-                <div>
-                  <h3 className="text-lg font-semibold text-white mb-3">Direção</h3>
-                  <p className="text-gray-300">{detailedContent.director}</p>
-                </div>
-
-                <div>
-                  <h3 className="text-lg font-semibold text-white mb-3">Idiomas</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {detailedContent.languages.map((language) => (
-                      <Badge key={language} variant="outline" className="border-white/20 text-gray-300">
-                        {language}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="text-lg font-semibold text-white mb-3">Classificação</h3>
-                  <div className="flex items-center space-x-4">
-                    <span className="border border-gray-500 px-3 py-1 text-sm text-white rounded">
-                      {detailedContent.rating}
-                    </span>
-                    <span className="text-gray-400">Conteúdo para maiores de idade</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Similar Content */}
-            <div>
-              <h3 className="text-xl font-semibold text-white mb-4">Conteúdo Similar</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {[
-                  {
-                    title: "Vikings",
-                    image: "https://images.unsplash.com/photo-1578662996442-48f60103fc96?w=300&h=400&fit=crop",
-                  },
-                  {
-                    title: "The Crown",
-                    image: "https://images.unsplash.com/photo-1440404653325-ab127d49abc1?w=300&h=400&fit=crop",
-                  },
-                  {
-                    title: "Peaky Blinders",
-                    image: "https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=300&h=400&fit=crop",
-                  },
-                  {
-                    title: "Outlander",
-                    image: "https://images.unsplash.com/photo-1518709268805-4e9042af2176?w=300&h=400&fit=crop",
-                  },
-                ].map((item, index) => (
-                  <div key={index} className="group cursor-pointer">
-                    <div className="relative aspect-[3/4] rounded-xl overflow-hidden mb-2">
+          {content && !loading && (
+            <>
+              {/* Hero Section */}
+              <div className="relative h-96 md:h-[500px] rounded-t-3xl overflow-hidden">
+                <Image
+                  src={content.poster}
+                  alt={content.nome}
+                  fill
+                  className="object-cover"
+                  priority
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/60 to-transparent" />
+                
+                {/* Content Info Overlay */}
+                <div className="absolute bottom-0 left-0 right-0 p-8">
+                  <div className="flex flex-col md:flex-row gap-6">
+                    {/* Poster */}
+                    <div className="w-48 h-72 rounded-xl overflow-hidden flex-shrink-0">
                       <Image
-                        src={item.image || "/placeholder.svg"}
-                        alt={item.title}
-                        fill
-                        className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        src={content.poster}
+                        alt={content.nome}
+                        width={192}
+                        height={288}
+                        className="w-full h-full object-cover"
                       />
                     </div>
-                    <h4 className="text-white font-medium group-hover:text-blue-400 transition-colors">{item.title}</h4>
+
+                    {/* Info */}
+                    <div className="flex-1">
+                      <h1 className="text-4xl md:text-5xl font-bold mb-4">{content.nome}</h1>
+                      
+                      {/* Metadata */}
+                      <div className="flex items-center gap-4 mb-4 text-sm">
+                        <div className="flex items-center gap-1">
+                          <Star className="w-4 h-4 text-yellow-500 fill-current" />
+                          <span>{content.rating.toFixed(1)}</span>
+                        </div>
+                        <span className="text-gray-300">{content.metadata.ano_lancamento}</span>
+                        <span className="border border-gray-500 text-gray-300 px-2 py-0.5 rounded">
+                          {content.metadata.idade_recomendada || 'L'}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <Clock className="w-4 h-4 text-gray-400" />
+                          <span>{formatDuration(content.metadata.duracao)}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Users className="w-4 h-4 text-gray-400" />
+                          <span>{formatNumber(content.total_visualizations)} visualizações</span>
+                        </div>
+                      </div>
+
+                      {/* Genres */}
+                      <div className="flex flex-wrap gap-2 mb-4">
+                        <span className="bg-blue-600 text-white px-3 py-1 rounded-full text-sm font-medium">
+                          {content.categoria}
+                        </span>
+                        <span className="bg-gray-600 text-white px-3 py-1 rounded-full text-sm">
+                          {content.subcategoria}
+                        </span>
+                        {content.is_series && content.temporada && (
+                          <span className="bg-purple-600 text-white px-3 py-1 rounded-full text-sm">
+                            Temporada {content.temporada}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex gap-4">
+                        <Button
+                          onClick={handlePlay}
+                          className="bg-white text-black hover:bg-gray-200 px-8 py-3 text-lg font-medium rounded-xl transition-all duration-300 hover:scale-105"
+                        >
+                          <Play className="w-5 h-5 mr-2" />
+                          Assistir
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="border-white/30 text-white hover:bg-white/10 px-8 py-3 text-lg rounded-xl backdrop-blur-sm bg-transparent"
+                        >
+                          <Plus className="w-5 h-5 mr-2" />
+                          Minha Lista
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="border-white/30 text-white hover:bg-white/10 p-3 rounded-xl backdrop-blur-sm bg-transparent"
+                        >
+                          <Info className="w-5 h-5" />
+                        </Button>
+                      </div>
+                    </div>
                   </div>
-                ))}
+                </div>
               </div>
-            </div>
-          </div>
+
+              {/* Details Section */}
+              <div className="p-8">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                  {/* Description */}
+                  <div className="md:col-span-2">
+                    <h3 className="text-xl font-semibold mb-4">Sinopse</h3>
+                    <p className="text-gray-300 leading-relaxed">{content.metadata.descricao}</p>
+                  </div>
+
+                  {/* Additional Info */}
+                  <div>
+                    <h3 className="text-xl font-semibold mb-4">Detalhes</h3>
+                    <div className="space-y-3 text-sm">
+                      <div>
+                        <span className="text-gray-400">Direção:</span>
+                        <p className="text-white">{content.metadata.diretor}</p>
+                      </div>
+                      {content.metadata.elenco && (
+                        <div>
+                          <span className="text-gray-400">Elenco:</span>
+                          <p className="text-white">{content.metadata.elenco.join(', ')}</p>
+                        </div>
+                      )}
+                      <div>
+                        <span className="text-gray-400">Qualidades:</span>
+                        <div className="flex gap-2 mt-1">
+                          {content.qualidades.map((quality) => (
+                            <span
+                              key={quality}
+                              className="bg-gray-700 text-white px-2 py-1 rounded text-xs"
+                            >
+                              {quality}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

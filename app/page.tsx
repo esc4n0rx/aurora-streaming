@@ -7,10 +7,22 @@ import AuthModal from "@/components/auth-modal"
 import Image from "next/image"
 import ContentDetailModal from "@/components/content-detail-modal"
 import { useRef } from "react"
+import { useAuthModal } from "@/hooks/use-auth-modal"
+import { useAuth } from "@/lib/auth-context"
+import { useRouter } from "next/navigation"
+import AuthLoading from "@/components/auth-loading"
 
 export default function LandingPage() {
-  const [showAuth, setShowAuth] = useState(false)
-  const [authMode, setAuthMode] = useState<"login" | "register">("login")
+  const { isOpen, mode, openModal, closeModal, switchMode } = useAuthModal()
+  const { isAuthenticated, isLoading } = useAuth()
+  const router = useRouter()
+
+  // Redirecionar se já estiver autenticado
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      router.push('/profiles')
+    }
+  }, [isAuthenticated, isLoading, router])
 
   const [featuredContent, setFeaturedContent] = useState<any[]>([])
   const [loadingFeatured, setLoadingFeatured] = useState(true)
@@ -119,8 +131,27 @@ export default function LandingPage() {
     return () => clearInterval(interval)
   }, [nowPlaying, currentHero, isNextLoaded])
 
+  // Mostrar loading enquanto verifica autenticação
+  if (isLoading) {
+    return <AuthLoading />
+  }
+
   return (
     <div className="min-h-screen bg-black text-white overflow-x-hidden">
+      {/* Header fixo */}
+      <header className="w-full flex items-center justify-between px-8 py-4 bg-black/80 border-b border-white/10 fixed top-0 left-0 z-50 backdrop-blur-md">
+        <span className="text-2xl font-bold tracking-tight select-none">
+          Aurora<span className="text-blue-500">+</span>
+        </span>
+        <Button
+          className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2"
+          onClick={() => openModal('login')}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.121 17.804A13.937 13.937 0 0112 15c2.5 0 4.847.655 6.879 1.804M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+          Iniciar sessão
+        </Button>
+      </header>
+      <div className="pt-24"> {/* Espaço para o header fixo */}
       {/* Hero Section */}
       <section className="relative h-screen flex items-center justify-center">
         {/* Background do Hero */}
@@ -163,10 +194,7 @@ export default function LandingPage() {
                 <p className="text-lg text-white/90 mb-8 max-w-2xl drop-shadow-lg">{nowPlaying[currentHero]?.description}</p>
                 <div className="flex gap-4">
                   <Button
-                    onClick={() => {
-                      setAuthMode("register")
-                      setShowAuth(true)
-                    }}
+                    onClick={() => openModal("register")}
                     className="bg-white text-black px-8 py-4 text-lg font-semibold rounded-xl shadow-lg hover:bg-gray-200 transition-all"
                   >
                     Entre para Assistir
@@ -232,7 +260,7 @@ export default function LandingPage() {
                     key={item.id || index}
                     className="group relative flex-shrink-0 w-80 cursor-pointer content-card animate-slide-up"
                     style={{ animationDelay: `${index * 0.1}s` }}
-                    onClick={() => setSelectedContent(item)}
+                    onClick={() => openModal('login')}
                   >
                     <div className="relative aspect-video rounded-2xl overflow-hidden bg-gray-800 w-80">
                       <Image
@@ -302,7 +330,7 @@ export default function LandingPage() {
                 <div
                   key={item.id || index}
                   className="group relative flex-shrink-0 w-80 cursor-pointer"
-                  onClick={() => setSelectedContent(item)}
+                  onClick={() => openModal('login')}
                 >
                   <div className="relative aspect-video rounded-xl overflow-hidden transition-all duration-300 group-hover:scale-105 group-hover:shadow-2xl group-hover:shadow-blue-500/20 w-80">
                     <Image
@@ -382,10 +410,7 @@ export default function LandingPage() {
             Join millions of viewers worldwide and discover your next favorite show or movie.
           </p>
           <Button
-            onClick={() => {
-              setAuthMode("register")
-              setShowAuth(true)
-            }}
+            onClick={() => openModal("register")}
             className="bg-blue-600 hover:bg-blue-700 text-white px-12 py-4 text-lg font-medium rounded-xl transition-all duration-300 hover:scale-105 shadow-lg hover:shadow-blue-500/25"
           >
             Start Your Free Trial
@@ -394,12 +419,10 @@ export default function LandingPage() {
       </section>
 
       {/* Auth Modal */}
-      {showAuth && (
-        <AuthModal mode={authMode} onClose={() => setShowAuth(false)} onSwitchMode={(mode) => setAuthMode(mode)} />
+      {isOpen && (
+        <AuthModal mode={mode} onClose={closeModal} onSwitchMode={switchMode} />
       )}
-
-      {/* Content Detail Modal */}
-      {selectedContent && <ContentDetailModal content={selectedContent} onClose={() => setSelectedContent(null)} />}
+      </div>
     </div>
   )
 }

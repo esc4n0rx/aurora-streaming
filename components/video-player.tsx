@@ -21,9 +21,10 @@ import {
 interface VideoPlayerProps {
   onClose: () => void
   title: string
+  videoUrl?: string
 }
 
-export default function VideoPlayer({ onClose, title }: VideoPlayerProps) {
+export default function VideoPlayer({ onClose, title, videoUrl }: VideoPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -32,13 +33,15 @@ export default function VideoPlayer({ onClose, title }: VideoPlayerProps) {
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(1)
   const [showSettings, setShowSettings] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [hasError, setHasError] = useState(false)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const controlsTimeoutRef = useRef<NodeJS.Timeout>()
 
-  // Sample video URL - using a public domain video
-  const videoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+  // Use provided video URL or fallback to sample video
+  const finalVideoUrl = videoUrl || "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
 
   useEffect(() => {
     const video = videoRef.current
@@ -46,15 +49,47 @@ export default function VideoPlayer({ onClose, title }: VideoPlayerProps) {
 
     const updateTime = () => setCurrentTime(video.currentTime)
     const updateDuration = () => setDuration(video.duration)
+    const handleLoadStart = () => setIsLoading(true)
+    const handleCanPlay = () => {
+      setIsLoading(false)
+      setHasError(false)
+      // Auto-play quando o vídeo estiver pronto
+      if (videoUrl) {
+        video.play().then(() => {
+          setIsPlaying(true)
+        }).catch((error) => {
+          console.error('Erro no auto-play:', error)
+          setIsPlaying(false)
+        })
+      }
+    }
+    const handleError = () => {
+      setIsLoading(false)
+      setHasError(true)
+    }
 
     video.addEventListener("timeupdate", updateTime)
     video.addEventListener("loadedmetadata", updateDuration)
+    video.addEventListener("loadstart", handleLoadStart)
+    video.addEventListener("canplay", handleCanPlay)
+    video.addEventListener("error", handleError)
 
     return () => {
       video.removeEventListener("timeupdate", updateTime)
       video.removeEventListener("loadedmetadata", updateDuration)
+      video.removeEventListener("loadstart", handleLoadStart)
+      video.removeEventListener("canplay", handleCanPlay)
+      video.removeEventListener("error", handleError)
     }
-  }, [])
+  }, [videoUrl])
+
+  // Reset loading state when videoUrl changes
+  useEffect(() => {
+    if (videoUrl) {
+      setIsLoading(true)
+      setHasError(false)
+    }
+  }, [videoUrl])
 
   const togglePlay = () => {
     const video = videoRef.current
@@ -137,10 +172,38 @@ export default function VideoPlayer({ onClose, title }: VideoPlayerProps) {
       onMouseMove={showControlsTemporarily}
       onMouseLeave={() => isPlaying && setShowControls(false)}
     >
+      {/* Loading Overlay */}
+      {isLoading && (
+        <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-10">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-500 mx-auto mb-4"></div>
+            <p className="text-white text-lg font-medium">Carregando conteúdo...</p>
+            <p className="text-gray-400 text-sm mt-2">Aguarde enquanto preparamos sua experiência</p>
+          </div>
+        </div>
+      )}
+
+      {/* Error Overlay */}
+      {hasError && (
+        <div className="absolute inset-0 bg-black/90 flex items-center justify-center z-10">
+          <div className="text-center">
+            <div className="text-red-500 text-6xl mb-4">⚠️</div>
+            <p className="text-white text-lg font-medium">Erro ao carregar vídeo</p>
+            <p className="text-gray-400 text-sm mt-2">Verifique sua conexão e tente novamente</p>
+            <Button 
+              onClick={onClose}
+              className="mt-4 bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded"
+            >
+              Fechar
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Video Element */}
       <video
         ref={videoRef}
-        src={videoUrl}
+        src={finalVideoUrl}
         className="w-full h-full object-contain"
         onClick={togglePlay}
         onPlay={() => setIsPlaying(true)}
